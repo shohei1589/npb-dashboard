@@ -589,7 +589,7 @@ mode = st.session_state.get("show_mode", "基本")
 show_team_col = team in ("すべて", "セリーグ", "パリーグ", "イースタン", "ウエスタン")
 
 # ---- 1) 所属（略称）表示：列名は「所属」、中身だけ略称にする ----
-if (level == "1軍" and category == "打者成績") and show_team_col and ("所属" in df.columns):
+if (category == "打者成績") and show_team_col and ("所属" in df.columns):
     df["所属"] = df["所属"].astype(str).str.strip()
     df["所属"] = df["所属"].map(TEAM_ABBR).fillna(df["所属"])
 
@@ -832,6 +832,12 @@ full_html = f"""
 
     /* 打率以降の統一列幅（PC） */
     --w-metric: 78px;
+
+    /* ★選手名列の幅（PC）＝「5文字が入る」くらい */
+    --w-name: 96px;
+
+    /* ★所属列の幅（PC）＝「2文字が入る」くらい */
+    --w-team: 44px;
   }}
 
   body {{
@@ -892,7 +898,15 @@ full_html = f"""
       --th-pad-x: 7px;
       --td-pad-y: 5px;
       --td-pad-x: 7px;
+
+      /* スマホは少し細く（横スクロール前提） */
       --w-metric: 66px;
+
+      /* ★選手名列（スマホ） */
+      --w-name: 84px;
+
+      /* ★所属列（スマホ） */
+      --w-team: 38px;
     }}
   }}
 </style>
@@ -957,7 +971,7 @@ full_html = f"""
       if (!th) return;
 
       const w = Math.ceil(th.getBoundingClientRect().width);
-      const z = 50 - k;
+      const z = 60 - k;
       const shadowCss = (k === existing.length - 1)
         ? "box-shadow: 6px 0 8px rgba(17,24,39,0.10);"
         : "";
@@ -979,6 +993,30 @@ full_html = f"""
     }});
   }}
 
+  function autoShrinkNameCells(table, nameIdx1) {{
+    // 「5文字が入る幅」を優先し、溢れるときだけ文字を縮小
+    const base = parseInt(getComputedStyle(document.documentElement).getPropertyValue("--td-font")) || 14;
+    const minSize = 9;  // これ以下にはしない
+    const cells = Array.from(table.querySelectorAll(`tbody td:nth-child(${{nameIdx1}})`));
+
+    cells.forEach(td => {{
+      const text = td.innerText.trim();
+      if (!text) return;
+
+      const len = text.length;
+
+      // 5文字以内ならベースのまま
+      if (len <= 5) {{
+        td.style.fontSize = `${{base}}px`;
+        return;
+      }}
+
+      // 6文字以上は段階的に縮める（自然な範囲で）
+      const newSize = Math.max(minSize, base - (len - 5));
+      td.style.fontSize = `${{newSize}}px`;
+    }});
+  }}
+
   function bind() {{
     const table = document.querySelector("table");
     if (!table) return;
@@ -988,11 +1026,21 @@ full_html = f"""
     ths.forEach((th, i) => headerToIndex.set(th.innerText.trim(), i + 1));
 
     /* 列幅：列名ベース */
-    if (headerToIndex.has("所属")) injectColWidthStyle(headerToIndex.get("所属"), 110);
+
+    // ★所属：2文字幅
+    if (headerToIndex.has("所属")) {{
+      const wTeam = parseInt(getComputedStyle(document.documentElement).getPropertyValue("--w-team")) || 44;
+      injectColWidthStyle(headerToIndex.get("所属"), wTeam);
+    }}
+
+    // ★選手名：5文字幅 + 左寄せ + 長い名前は自動縮小
     if (headerToIndex.has("選手名")) {{
       const idx = headerToIndex.get("選手名");
-      injectColWidthStyle(idx, 150, "text-align:left !important;");
+      const wName = parseInt(getComputedStyle(document.documentElement).getPropertyValue("--w-name")) || 96;
+      injectColWidthStyle(idx, wName, "text-align:left !important;");
+      autoShrinkNameCells(table, idx);
     }}
+
     if (headerToIndex.has("年齢")) injectColWidthStyle(headerToIndex.get("年齢"), 34);
     if (headerToIndex.has("投")) injectColWidthStyle(headerToIndex.get("投"), 34);
     if (headerToIndex.has("打")) injectColWidthStyle(headerToIndex.get("打"), 34);
@@ -1010,8 +1058,8 @@ full_html = f"""
       }}
     }}
 
-    /* 固定列：打列まで */
-    freezeColumns(ths, headerToIndex, ["所属", "選手名", "年齢", "投", "打"]);
+    /* 固定列：選手名のみ */
+    freezeColumns(ths, headerToIndex, ["選手名"]);
 
     /* ソート */
     ths.forEach((th, idx0) => {{
@@ -1032,7 +1080,6 @@ full_html = f"""
 </body>
 </html>
 """
-
 
 components.html(full_html, height=820, scrolling=True)
 
