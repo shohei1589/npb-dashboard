@@ -822,7 +822,15 @@ full_html = f"""
     --shadow: 0 8px 24px rgba(17,24,39,0.08);
     --radius: 14px;
 
-    /* 打率以降の統一列幅 */
+    /* PC基準 */
+    --th-font: 13px;
+    --td-font: 14px;
+    --th-pad-y: 8px;
+    --th-pad-x: 10px;
+    --td-pad-y: 7px;
+    --td-pad-x: 10px;
+
+    /* 打率以降の統一列幅（PC） */
     --w-metric: 78px;
   }}
 
@@ -847,26 +855,24 @@ full_html = f"""
     width: 100%;
   }}
 
-  /* ===== header ===== */
   thead th {{
     position: sticky;
     top: 0;
     z-index: 3;
     background: #ffffff;
     border: 1px solid var(--border);
-    padding: 8px 10px;
-    font-size: 13px;          /* ★ 常に同じ */
+    padding: var(--th-pad-y) var(--th-pad-x);
+    font-size: var(--th-font);
     font-weight: 600;
     white-space: nowrap;
     text-align: center;
     cursor: pointer;
   }}
 
-  /* ===== body ===== */
   tbody td {{
     border: 1px solid var(--border2);
-    padding: 7px 10px;
-    font-size: 14px;          /* ★ 常に同じ */
+    padding: var(--td-pad-y) var(--td-pad-x);
+    font-size: var(--td-font);
     white-space: nowrap;
     text-align: center;
     overflow: hidden;
@@ -875,6 +881,19 @@ full_html = f"""
 
   tbody tr:hover td {{
     background: rgba(37,99,235,0.06);
+  }}
+
+  /* ===== スマホだけ：文字/余白/列幅を小さく ===== */
+  @media (max-width: 768px) {{
+    :root {{
+      --th-font: 11px;
+      --td-font: 12px;
+      --th-pad-y: 6px;
+      --th-pad-x: 7px;
+      --td-pad-y: 5px;
+      --td-pad-x: 7px;
+      --w-metric: 66px;
+    }}
   }}
 </style>
 </head>
@@ -926,38 +945,61 @@ full_html = f"""
     document.head.appendChild(css);
   }}
 
+  function freezeColumns(ths, headerToIndex, names) {{
+    const existing = names.filter(n => headerToIndex.has(n));
+    if (existing.length === 0) return;
+
+    let left = 0;
+    existing.forEach((name, k) => {{
+      const idx1 = headerToIndex.get(name);   // 1-based
+      const idx0 = idx1 - 1;                  // 0-based
+      const th = ths[idx0];
+      if (!th) return;
+
+      const w = Math.ceil(th.getBoundingClientRect().width);
+      const z = 50 - k;
+      const shadowCss = (k === existing.length - 1)
+        ? "box-shadow: 6px 0 8px rgba(17,24,39,0.10);"
+        : "";
+
+      const css = document.createElement("style");
+      css.textContent = `
+        thead th:nth-child(${{idx1}}),
+        tbody td:nth-child(${{idx1}}) {{
+          position: sticky !important;
+          left: ${{left}}px !important;
+          z-index: ${{z}} !important;
+          background: rgba(255,255,255,0.98) !important;
+          ${{shadowCss}}
+        }}
+      `;
+      document.head.appendChild(css);
+
+      left += w;
+    }});
+  }}
+
   function bind() {{
     const table = document.querySelector("table");
     if (!table) return;
 
     const ths = Array.from(table.querySelectorAll("thead th"));
     const headerToIndex = new Map();
-    ths.forEach((th, i) => headerToIndex.set(th.innerText.trim(), i + 1)); // 1-based
+    ths.forEach((th, i) => headerToIndex.set(th.innerText.trim(), i + 1));
 
-    /* ===== 列幅：列名ベース ===== */
-    if (headerToIndex.has("所属")) {{
-      injectColWidthStyle(headerToIndex.get("所属"), 110);
-    }}
-
+    /* 列幅：列名ベース */
+    if (headerToIndex.has("所属")) injectColWidthStyle(headerToIndex.get("所属"), 110);
     if (headerToIndex.has("選手名")) {{
       const idx = headerToIndex.get("選手名");
       injectColWidthStyle(idx, 150, "text-align:left !important;");
-      const css2 = document.createElement("style");
-      css2.textContent = `
-        tbody td:nth-child(${{idx}}) {{
-          font-size: 13px !important;
-        }}
-      `;
-      document.head.appendChild(css2);
     }}
-
     if (headerToIndex.has("年齢")) injectColWidthStyle(headerToIndex.get("年齢"), 34);
     if (headerToIndex.has("投")) injectColWidthStyle(headerToIndex.get("投"), 34);
     if (headerToIndex.has("打")) injectColWidthStyle(headerToIndex.get("打"), 34);
     if (headerToIndex.has("打席")) injectColWidthStyle(headerToIndex.get("打席"), 64);
     if (headerToIndex.has("得点圏打率")) injectColWidthStyle(headerToIndex.get("得点圏打率"), 72);
 
-    /* ===== 打率以降（打より右）を同じ幅に統一 ===== */
+    /* 打率以降を同じ幅に */
     if (headerToIndex.has("打率")) {{
       const start = headerToIndex.get("打率");
       const metricWidth = getComputedStyle(document.documentElement)
@@ -968,11 +1010,14 @@ full_html = f"""
       }}
     }}
 
-    /* ===== ソート：降順⇄昇順 ===== */
+    /* 固定列：打列まで */
+    freezeColumns(ths, headerToIndex, ["所属", "選手名", "年齢", "投", "打"]);
+
+    /* ソート */
     ths.forEach((th, idx0) => {{
       if (th.dataset.bound === "1") return;
       th.dataset.bound = "1";
-      th.dataset.asc = "0"; // 初回クリック＝降順
+      th.dataset.asc = "0";
       th.addEventListener("click", () => {{
         const asc = th.dataset.asc === "1";
         sortTable(table, idx0, asc);
