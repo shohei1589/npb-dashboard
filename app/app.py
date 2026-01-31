@@ -441,10 +441,9 @@ except Exception:
     category = st.radio("カテゴリ", ["打者成績", "投手成績"], horizontal=True, label_visibility="collapsed")
 
 # ===== 上部フィルタ（年度・所属）=====
-seasons = get_seasons()
-if not seasons:
-    st.error("年度が取得できませんでした。DB内容を確認してください。")
-    st.stop()
+# 年度は固定レンジ（2005〜2025）
+seasons = list(range(2025, 2004, -1))
+
 
 # 上部で年度・所属を並べる
 colA, colB, colC = st.columns([1, 1, 4])

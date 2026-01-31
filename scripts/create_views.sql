@@ -58,7 +58,7 @@ SELECT
 
   /* --- ISO --- */
   CASE WHEN 打数 > 0
-       THEN (2*二塁打 + 3*三塁打 + 4*本塁打) * 1.0 / 打数
+       THEN (二塁打 + 2*三塁打 + 3*本塁打) * 1.0 / 打数
   END AS ISO,
 
   /* --- BABIP --- */
@@ -197,7 +197,7 @@ SELECT
   END AS 長打率,
 
   CASE WHEN 打数 > 0
-       THEN (2*二塁打 + 3*三塁打 + 4*本塁打) * 1.0 / 打数
+       THEN (二塁打 + 2*三塁打 + 3*本塁打) * 1.0 / 打数
   END AS ISO,
 
   CASE WHEN (打数 - 三振 - 本塁打 + 犠飛) > 0
