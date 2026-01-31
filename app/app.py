@@ -868,7 +868,7 @@ full_html = f"""
     /* 所属列：2文字が入るくらい */
     --w-team: 44px;
 
-    /* 行高さ（スマホで使う） */
+    /* スマホ時の行高さ（行単位感を出す） */
     --row-h: 36px;
   }}
 
@@ -879,7 +879,7 @@ full_html = f"""
     font-family: Meiryo, "メイリオ", "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif;
   }}
 
-  /* PC：テーブル内部で縦スクロール（従来通り） */
+  /* テーブル内スクロール（縦スクロールは現状維持） */
   .npb-table-wrap {{
     overflow: auto;
     max-height: 86vh;
@@ -894,7 +894,7 @@ full_html = f"""
     width: 100%;
   }}
 
-  /* 1行目（ヘッダー固定） */
+  /* 1行目（ヘッダー固定：テーブル内スクロールに対して固定されます） */
   thead th {{
     position: sticky;
     top: 0;
@@ -924,7 +924,7 @@ full_html = f"""
     background: rgba(37,99,235,0.06);
   }}
 
-  /* ===== スマホ：縦横スクロールを「画面（body）」側に統一 ===== */
+  /* ===== スマホだけ：文字/余白/列幅を小さく + スクロール感を整える ===== */
   @media (max-width: 768px) {{
     :root {{
       --th-font: 11px;
@@ -941,28 +941,12 @@ full_html = f"""
       --row-h: 34px;
     }}
 
-    /* ★スクロール主体をページに寄せる（縦：ページ、横：ページ） */
-    body {{
-      overflow-x: auto;   /* 横スクロールはページ側で */
-      overflow-y: auto;   /* 縦スクロールもページ側で */
+    /* “ぬるっとしすぎる”慣性を弱める（好みで touch に戻してOK） */
+    .npb-table-wrap {{
       -webkit-overflow-scrolling: auto;
     }}
 
-    /* ★ラップは“スクロールさせない” */
-    .npb-table-wrap {{
-      max-height: none;
-      overflow: visible;
-      box-shadow: none;              /* スマホは軽く（任意） */
-      border-radius: 12px;
-    }}
-
-    /* テーブルを横に伸ばしてページ横スクロールで見せる */
-    table {{
-      width: max-content;
-      min-width: 100%;
-    }}
-
-    /* 行単位感（任意） */
+    /* 行単位感：高さ固定 */
     tbody tr {{
       height: var(--row-h);
     }}
@@ -1022,19 +1006,27 @@ full_html = f"""
     document.head.appendChild(css);
   }}
 
-  function freezeFirstColumn(ths) {{
-    // ★1列目固定（列名に依存しない）
-    const idx1 = 1;
-    const th = ths[0];
+  // ★固定列は「選手名」だけ（所属が1列目にあっても固定しない）
+  function freezeNameColumn(ths, headerToIndex) {{
+    if (!headerToIndex.has("選手名")) return;
+    const idx1 = headerToIndex.get("選手名");  // 1-based
+    const idx0 = idx1 - 1;
+    const th = ths[idx0];
     if (!th) return;
 
     const css = document.createElement("style");
     css.textContent = `
-      thead th:nth-child(${{idx1}}),
+      thead th:nth-child(${{idx1}}) {{
+        position: sticky !important;
+        left: 0px !important;
+        z-index: 60 !important; /* 角（ヘッダー×固定列）を最前面に */
+        background: rgba(255,255,255,0.98) !important;
+        box-shadow: 6px 0 8px rgba(17,24,39,0.10);
+      }}
       tbody td:nth-child(${{idx1}}) {{
         position: sticky !important;
         left: 0px !important;
-        z-index: 40 !important;
+        z-index: 50 !important;
         background: rgba(255,255,255,0.98) !important;
         box-shadow: 6px 0 8px rgba(17,24,39,0.10);
       }}
@@ -1088,6 +1080,7 @@ full_html = f"""
     if (headerToIndex.has("打席")) injectColWidthStyle(headerToIndex.get("打席"), 64);
     if (headerToIndex.has("得点圏打率")) injectColWidthStyle(headerToIndex.get("得点圏打率"), 72);
 
+    /* 打率以降を同じ幅に */
     if (headerToIndex.has("打率")) {{
       const start = headerToIndex.get("打率");
       const metricWidth = getComputedStyle(document.documentElement)
@@ -1098,8 +1091,8 @@ full_html = f"""
       }}
     }}
 
-    /* ★1列目固定 */
-    freezeFirstColumn(ths);
+    /* ★固定：選手名 */
+    freezeNameColumn(ths, headerToIndex);
 
     /* ソート */
     ths.forEach((th, idx0) => {{
@@ -1120,6 +1113,7 @@ full_html = f"""
 </body>
 </html>
 """
+
 
 # 例：スマホは iframe 高さを大きくして「画面スクロールに統一」
 row_h = 34 if is_mobile else 0
