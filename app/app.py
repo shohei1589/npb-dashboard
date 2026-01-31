@@ -924,7 +924,7 @@ full_html = f"""
     background: rgba(37,99,235,0.06);
   }}
 
-  /* ===== スマホ：画面（ページ）縦スクロールに統一する ===== */
+  /* ===== スマホ：縦横スクロールを「画面（body）」側に統一 ===== */
   @media (max-width: 768px) {{
     :root {{
       --th-font: 11px;
@@ -941,15 +941,28 @@ full_html = f"""
       --row-h: 34px;
     }}
 
-    /* ★縦スクロールをやめる：ページ側で縦スクロール */
-    .npb-table-wrap {{
-      max-height: none;       /* 内部縦スクロール禁止 */
-      overflow-y: visible;    /* 縦はページに任せる */
-      overflow-x: auto;       /* 横だけラップ内でスクロール */
+    /* ★スクロール主体をページに寄せる（縦：ページ、横：ページ） */
+    body {{
+      overflow-x: auto;   /* 横スクロールはページ側で */
+      overflow-y: auto;   /* 縦スクロールもページ側で */
       -webkit-overflow-scrolling: auto;
     }}
 
-    /* 行単位感：高さ固定（任意だけど違和感軽減） */
+    /* ★ラップは“スクロールさせない” */
+    .npb-table-wrap {{
+      max-height: none;
+      overflow: visible;
+      box-shadow: none;              /* スマホは軽く（任意） */
+      border-radius: 12px;
+    }}
+
+    /* テーブルを横に伸ばしてページ横スクロールで見せる */
+    table {{
+      width: max-content;
+      min-width: 100%;
+    }}
+
+    /* 行単位感（任意） */
     tbody tr {{
       height: var(--row-h);
     }}
@@ -1010,8 +1023,8 @@ full_html = f"""
   }}
 
   function freezeFirstColumn(ths) {{
-    // ★1列目を固定（列名に依存しない）
-    const idx1 = 1; // 1-based
+    // ★1列目固定（列名に依存しない）
+    const idx1 = 1;
     const th = ths[0];
     if (!th) return;
 
@@ -1030,7 +1043,6 @@ full_html = f"""
   }}
 
   function autoShrinkNameCells(table, nameIdx1) {{
-    // 「5文字が入る幅」を優先し、溢れるときだけ文字を縮小
     const base = parseInt(getComputedStyle(document.documentElement).getPropertyValue("--td-font")) || 14;
     const minSize = 9;
     const cells = Array.from(table.querySelectorAll(`tbody td:nth-child(${{nameIdx1}})`));
@@ -1057,7 +1069,7 @@ full_html = f"""
     const headerToIndex = new Map();
     ths.forEach((th, i) => headerToIndex.set(th.innerText.trim(), i + 1));
 
-    /* 列幅：列名ベース */
+    /* 列幅 */
     if (headerToIndex.has("所属")) {{
       const wTeam = parseInt(getComputedStyle(document.documentElement).getPropertyValue("--w-team")) || 44;
       injectColWidthStyle(headerToIndex.get("所属"), wTeam);
@@ -1076,7 +1088,6 @@ full_html = f"""
     if (headerToIndex.has("打席")) injectColWidthStyle(headerToIndex.get("打席"), 64);
     if (headerToIndex.has("得点圏打率")) injectColWidthStyle(headerToIndex.get("得点圏打率"), 72);
 
-    /* 打率以降を同じ幅に */
     if (headerToIndex.has("打率")) {{
       const start = headerToIndex.get("打率");
       const metricWidth = getComputedStyle(document.documentElement)
@@ -1087,7 +1098,7 @@ full_html = f"""
       }}
     }}
 
-    /* ★1列目固定（必須） */
+    /* ★1列目固定 */
     freezeFirstColumn(ths);
 
     /* ソート */
