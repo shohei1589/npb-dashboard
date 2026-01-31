@@ -93,6 +93,7 @@ is_mobile = str(params.get("mobile", "0")) == "1"
 # 既に is_mobile を作っているならここは不要。無ければ導入する。
 is_mobile = st.session_state.get("is_mobile", False)
 
+
 # （任意）簡易にスマホ判定をしたい場合は query_params で運用する方法もあるが、
 # ここでは「is_mobile がどこかで入っている」前提にしています。
 
@@ -861,11 +862,14 @@ full_html = f"""
     /* 打率以降の統一列幅（PC） */
     --w-metric: 78px;
 
-    /* ★選手名列の幅（PC）＝「5文字が入る」くらい */
+    /* 選手名列：5文字が入るくらい */
     --w-name: 96px;
 
-    /* ★所属列の幅（PC）＝「2文字が入る」くらい */
+    /* 所属列：2文字が入るくらい */
     --w-team: 44px;
+
+    /* 行高さ（スマホで使う） */
+    --row-h: 36px;
   }}
 
   body {{
@@ -875,6 +879,7 @@ full_html = f"""
     font-family: Meiryo, "メイリオ", "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif;
   }}
 
+  /* PC：テーブル内部で縦スクロール（従来通り） */
   .npb-table-wrap {{
     overflow: auto;
     max-height: 86vh;
@@ -889,10 +894,11 @@ full_html = f"""
     width: 100%;
   }}
 
+  /* 1行目（ヘッダー固定） */
   thead th {{
     position: sticky;
     top: 0;
-    z-index: 3;
+    z-index: 30;
     background: #ffffff;
     border: 1px solid var(--border);
     padding: var(--th-pad-y) var(--th-pad-x);
@@ -911,13 +917,14 @@ full_html = f"""
     text-align: center;
     overflow: hidden;
     text-overflow: ellipsis;
+    background: #ffffff;
   }}
 
   tbody tr:hover td {{
     background: rgba(37,99,235,0.06);
   }}
 
-  /* ===== スマホだけ：文字/余白/列幅を小さく ===== */
+  /* ===== スマホ：画面（ページ）縦スクロールに統一する ===== */
   @media (max-width: 768px) {{
     :root {{
       --th-font: 11px;
@@ -927,14 +934,29 @@ full_html = f"""
       --td-pad-y: 5px;
       --td-pad-x: 7px;
 
-      /* スマホは少し細く（横スクロール前提） */
       --w-metric: 66px;
-
-      /* ★選手名列（スマホ） */
       --w-name: 84px;
-
-      /* ★所属列（スマホ） */
       --w-team: 38px;
+
+      --row-h: 34px;
+    }}
+
+    /* ★縦スクロールをやめる：ページ側で縦スクロール */
+    .npb-table-wrap {{
+      max-height: none;       /* 内部縦スクロール禁止 */
+      overflow-y: visible;    /* 縦はページに任せる */
+      overflow-x: auto;       /* 横だけラップ内でスクロール */
+      -webkit-overflow-scrolling: auto;
+    }}
+
+    /* 行単位感：高さ固定（任意だけど違和感軽減） */
+    tbody tr {{
+      height: var(--row-h);
+    }}
+    tbody td {{
+      line-height: var(--row-h);
+      padding-top: 0;
+      padding-bottom: 0;
     }}
   }}
 </style>
@@ -987,44 +1009,30 @@ full_html = f"""
     document.head.appendChild(css);
   }}
 
-  function freezeColumns(ths, headerToIndex, names) {{
-    const existing = names.filter(n => headerToIndex.has(n));
-    if (existing.length === 0) return;
+  function freezeFirstColumn(ths) {{
+    // ★1列目を固定（列名に依存しない）
+    const idx1 = 1; // 1-based
+    const th = ths[0];
+    if (!th) return;
 
-    let left = 0;
-    existing.forEach((name, k) => {{
-      const idx1 = headerToIndex.get(name);   // 1-based
-      const idx0 = idx1 - 1;                  // 0-based
-      const th = ths[idx0];
-      if (!th) return;
-
-      const w = Math.ceil(th.getBoundingClientRect().width);
-      const z = 60 - k;
-      const shadowCss = (k === existing.length - 1)
-        ? "box-shadow: 6px 0 8px rgba(17,24,39,0.10);"
-        : "";
-
-      const css = document.createElement("style");
-      css.textContent = `
-        thead th:nth-child(${{idx1}}),
-        tbody td:nth-child(${{idx1}}) {{
-          position: sticky !important;
-          left: ${{left}}px !important;
-          z-index: ${{z}} !important;
-          background: rgba(255,255,255,0.98) !important;
-          ${{shadowCss}}
-        }}
-      `;
-      document.head.appendChild(css);
-
-      left += w;
-    }});
+    const css = document.createElement("style");
+    css.textContent = `
+      thead th:nth-child(${{idx1}}),
+      tbody td:nth-child(${{idx1}}) {{
+        position: sticky !important;
+        left: 0px !important;
+        z-index: 40 !important;
+        background: rgba(255,255,255,0.98) !important;
+        box-shadow: 6px 0 8px rgba(17,24,39,0.10);
+      }}
+    `;
+    document.head.appendChild(css);
   }}
 
   function autoShrinkNameCells(table, nameIdx1) {{
     // 「5文字が入る幅」を優先し、溢れるときだけ文字を縮小
     const base = parseInt(getComputedStyle(document.documentElement).getPropertyValue("--td-font")) || 14;
-    const minSize = 9;  // これ以下にはしない
+    const minSize = 9;
     const cells = Array.from(table.querySelectorAll(`tbody td:nth-child(${{nameIdx1}})`));
 
     cells.forEach(td => {{
@@ -1032,14 +1040,10 @@ full_html = f"""
       if (!text) return;
 
       const len = text.length;
-
-      // 5文字以内ならベースのまま
       if (len <= 5) {{
         td.style.fontSize = `${{base}}px`;
         return;
       }}
-
-      // 6文字以上は段階的に縮める（自然な範囲で）
       const newSize = Math.max(minSize, base - (len - 5));
       td.style.fontSize = `${{newSize}}px`;
     }});
@@ -1054,14 +1058,11 @@ full_html = f"""
     ths.forEach((th, i) => headerToIndex.set(th.innerText.trim(), i + 1));
 
     /* 列幅：列名ベース */
-
-    // ★所属：2文字幅
     if (headerToIndex.has("所属")) {{
       const wTeam = parseInt(getComputedStyle(document.documentElement).getPropertyValue("--w-team")) || 44;
       injectColWidthStyle(headerToIndex.get("所属"), wTeam);
     }}
 
-    // ★選手名：5文字幅 + 左寄せ + 長い名前は自動縮小
     if (headerToIndex.has("選手名")) {{
       const idx = headerToIndex.get("選手名");
       const wName = parseInt(getComputedStyle(document.documentElement).getPropertyValue("--w-name")) || 96;
@@ -1086,8 +1087,8 @@ full_html = f"""
       }}
     }}
 
-    /* 固定列：選手名のみ */
-    freezeColumns(ths, headerToIndex, ["選手名"]);
+    /* ★1列目固定（必須） */
+    freezeFirstColumn(ths);
 
     /* ソート */
     ths.forEach((th, idx0) => {{
@@ -1109,8 +1110,15 @@ full_html = f"""
 </html>
 """
 
-components.html(full_html, height=820, scrolling=True)
-
+# 例：スマホは iframe 高さを大きくして「画面スクロールに統一」
+row_h = 34 if is_mobile else 0
+if is_mobile:
+    # ヘッダー1行 + データ行 + 余白
+    est_h = int((len(df) + 1) * row_h + 220)
+    est_h = min(est_h, 2400)  # 伸びすぎ防止（必要なら調整）
+    components.html(full_html, height=est_h, scrolling=False)
+else:
+    components.html(full_html, height=820, scrolling=False)
 
 
 
