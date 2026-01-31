@@ -86,6 +86,34 @@ TEAM_ABBR = {
 
 NPB_TEAMS_2GUN_EXTRA = ["ハヤテ", "オイシックス"]
 
+params = st.query_params
+is_mobile = str(params.get("mobile", "0")) == "1"
+
+# ===== スマホ判定（画面幅）=====
+# 既に is_mobile を作っているならここは不要。無ければ導入する。
+is_mobile = st.session_state.get("is_mobile", False)
+
+# （任意）簡易にスマホ判定をしたい場合は query_params で運用する方法もあるが、
+# ここでは「is_mobile がどこかで入っている」前提にしています。
+
+# ===== スマホだけ表示行数を制限 =====
+if is_mobile:
+    st.caption("📱 スマホ表示：上位のみ表示（打席順）")
+    n_rows = st.selectbox(
+        "表示人数",
+        options=[50, 100, 200, "全件"],
+        index=0,
+        key="mobile_n_rows",
+    )
+
+    # 打席順（デフォルト）で上位N
+    if "打席" in df.columns:
+        df = df.sort_values("打席", ascending=False)
+
+    if n_rows != "全件":
+        df = df.head(int(n_rows))
+
+
 # ===== リーグ定義 =====
 PACIFIC = ["ソフトバンク", "日本ハム", "オリックス", "楽天", "西武", "ロッテ"]
 CENTRAL  = ["阪神", "巨人", "広島", "DeNA", "中日", "ヤクルト"]
