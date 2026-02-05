@@ -5,8 +5,57 @@ import pandas as pd
 import streamlit as st
 import math
 import streamlit.components.v1 as components
-
+import re
 import numpy as np
+
+def format_ip(val):
+    """
+    投球回の表示を '123 1/3' '123 2/3' 形式に整形する。
+    val が 12.1/12.2 方式でも、12.333... 方式でも、outs整数でも対応。
+    """
+    if val is None:
+        return ""
+
+    # 文字列で入ってくるケース（すでに "12 1/3" 等ならそのまま）
+    if isinstance(val, str):
+        s = val.strip()
+        if s == "":
+            return ""
+        return s
+
+    try:
+        # outs（奪アウト数）が整数で入っている場合の救済
+        if isinstance(val, (int,)) and val >= 0:
+            outs = val
+        else:
+            x = float(val)
+
+            # よくある 12.1 / 12.2 方式を優先的に解釈
+            whole = int(x)
+            frac = round(x - whole, 1)
+
+            if abs(frac - 0.1) < 1e-9:
+                return f"{whole} 1/3"
+            if abs(frac - 0.2) < 1e-9:
+                return f"{whole} 2/3"
+            if abs(frac - 0.0) < 1e-9:
+                return f"{whole}"
+
+            # 12.333... のような“真の小数”の場合：1/3刻みに丸める
+            outs = int(round(x * 3))
+
+        innings = outs // 3
+        rem = outs % 3
+        if rem == 1:
+            return f"{innings} 1/3"
+        if rem == 2:
+            return f"{innings} 2/3"
+        return f"{innings}"
+
+    except Exception:
+        # 何か変な値でも落とさず文字列化
+        return str(val)
+
 
 HILITE_COLS = [
     "打率", "出塁率", "長打率", "OPS",
@@ -148,15 +197,46 @@ BASIC_COLS_BAT2 = BASIC_COLS_BAT1[:]  # 基本は同じ
 ADV_COLS_BAT2 = [c for c in ADV_COLS_BAT1 if c != "得点圏打率"]
 
 
+# --- 投手（基本） ---
+BASIC_COLS_PIT1 = [
+    "選手名","年齢","投","打","防御率","登板","先発","勝利","敗戦","S","HLD",
+    "完投","完封","無四球","被打者","投球回","被安打","被本塁打","四球","敬遠",
+    "死球","三振","暴投","ボーク","失点","自責点"
+]
+
+BASIC_COLS_PIT2 = [
+    "選手名","年齢","投","打","防御率","登板","勝利","敗戦","S",
+    "完投","完封","無四球","被打者","投球回","被安打","被本塁打","四球","敬遠",
+    "死球","三振","暴投","ボーク","失点","自責点"
+]
+
 DISPLAY_COLUMNS = {
     ("1軍", "打者成績", "基本"): BASIC_COLS_BAT1,
     ("1軍", "打者成績", "アドバンスド"): ADV_COLS_BAT1,
 
-    # ★追加（2軍）
     ("2軍", "打者成績", "基本"): BASIC_COLS_BAT2,
     ("2軍", "打者成績", "アドバンスド"): ADV_COLS_BAT2,
+
+    # ★追加（投手）
+    ("1軍", "投手成績", "基本"): BASIC_COLS_PIT1,
+    ("2軍", "投手成績", "基本"): BASIC_COLS_PIT2,
+
+    # 今は投手のアドバンスド未実装なので、同じ列を出す（将来差し替え）
+    ("1軍", "投手成績", "アドバンスド"): BASIC_COLS_PIT1,
+    ("2軍", "投手成績", "アドバンスド"): BASIC_COLS_PIT2,
 }
 
+@st.cache_data
+def get_team_games_by_level(season: int, level: str) -> pd.DataFrame:
+    view = "batting_1_view" if level == "1軍" else "batting_2_view"
+    sql = f"""
+    SELECT 年度, 所属, MAX(COALESCE(試合,0)) AS 試合数
+    FROM {view}
+    WHERE 年度 = ?
+    GROUP BY 年度, 所属
+    """
+    with sqlite3.connect(DB_PATH) as con:
+        return pd.read_sql(sql, con, params=(season,))
 
 @st.cache_data
 def get_seasons() -> list[int]:
@@ -176,7 +256,89 @@ def get_teams(season: int, level: str, db_mtime: float) -> list[str]:
         )
     return df["所属"].dropna().astype(str).tolist()
 
+def outs_to_ip_str(v) -> str:
+    if pd.isna(v):
+        return "-"
+    try:
+        outs = int(float(v))
+    except Exception:
+        return "-"
+    ip = outs // 3
+    rem = outs % 3
+    if rem == 0:
+        return f"{ip}"
+    if rem == 1:
+        return f"{ip} 1/3"
+    return f"{ip} 2/3"
 
+def ip_float_to_fraction_str(v) -> str:
+    """
+    投球回が小数で来る場合（例: 36.333333 / 13.666667）を
+    "36 1/3" / "13 2/3" に変換する。
+    すでに文字列ならそのまま返す。
+    """
+    if v is None or (isinstance(v, float) and pd.isna(v)) or (isinstance(v, str) and v.strip() == ""):
+        return "-"
+
+    # すでに "36 1/3" 等ならそのまま
+    if isinstance(v, str):
+        s = v.strip()
+        return s if s else "-"
+
+    try:
+        x = float(v)
+        outs = int(round(x * 3))  # 1/3刻みに丸め
+        ip = outs // 3
+        rem = outs % 3
+        if rem == 0:
+            return f"{ip}"
+        elif rem == 1:
+            return f"{ip} 1/3"
+        else:
+            return f"{ip} 2/3"
+    except Exception:
+        return str(v)
+
+def ip_to_ip_str(v) -> str:
+    """
+    投球回の表示を統一する:
+    - "100 1/3" / "100 2/3" はそのまま
+    - "100.1" / "100.2" を "100 1/3" / "100 2/3" に変換
+    - 数値 100.1 / 100.2 も同様に変換
+    - それ以外は文字列化して返す
+    """
+    if v is None or pd.isna(v):
+        return "-"
+
+    # すでに "100 1/3" 形式ならそのまま
+    if isinstance(v, str):
+        s = v.strip()
+        if s == "":
+            return "-"
+        if re.match(r"^[0-9]+\s+(1/3|2/3)$", s):
+            return s
+        # "100.1" / "100.2" 文字列
+        m = re.match(r"^([0-9]+)\.([12])$", s)
+        if m:
+            ip = int(m.group(1))
+            return f"{ip} 1/3" if m.group(2) == "1" else f"{ip} 2/3"
+        return s
+
+    # 数値 100.1 / 100.2 など
+    try:
+        x = float(v)
+        ip = int(x)
+        frac = round(x - ip, 1)
+        if abs(frac - 0.1) < 1e-9:
+            return f"{ip} 1/3"
+        if abs(frac - 0.2) < 1e-9:
+            return f"{ip} 2/3"
+        if abs(frac - 0.0) < 1e-9:
+            return f"{ip}"
+        # それ以外（変な小数）は落とさず表示
+        return str(v)
+    except Exception:
+        return str(v)
 
 @st.cache_data
 def get_batting_1(season: int, team: str) -> pd.DataFrame:
@@ -270,26 +432,115 @@ def get_batting_2(season: int, team: str) -> pd.DataFrame:
 
 @st.cache_data
 def get_pitching_1(season: int, team: str) -> pd.DataFrame:
-    sql = """
-    SELECT *
-    FROM pitching_1_raw
-    WHERE 年度 = ? AND 所属 = ?
-    """
+    teams_1gun = tuple(NPB_TEAMS_1GUN)
+
+    if team == "すべて":
+        sql = f"""
+        SELECT *
+        FROM pitching_1_view
+        WHERE 年度 = ?
+          AND 所属 IN {teams_1gun}
+        ORDER BY 投球回_outs DESC
+        """
+        params = (season,)
+
+    elif team == "セリーグ":
+        sql = f"""
+        SELECT *
+        FROM pitching_1_view
+        WHERE 年度 = ?
+          AND 所属 IN {tuple(CENTRAL + BAYSTARS_OLD)}
+        ORDER BY 投球回_outs DESC
+        """
+        params = (season,)
+
+    elif team == "パリーグ":
+        sql = f"""
+        SELECT *
+        FROM pitching_1_view
+        WHERE 年度 = ?
+          AND 所属 IN {tuple(PACIFIC)}
+        ORDER BY 投球回_outs DESC
+        """
+        params = (season,)
+
+    else:
+        sql = """
+        SELECT *
+        FROM pitching_1_view
+        WHERE 年度 = ? AND 所属 = ?
+        ORDER BY 投球回_outs DESC
+        """
+        params = (season, team)
+
     with sqlite3.connect(DB_PATH) as con:
-        df = pd.read_sql(sql, con, params=(season, team))
+        df = pd.read_sql(sql, con, params=params)
+
     return df
 
 
 @st.cache_data
 def get_pitching_2(season: int, team: str) -> pd.DataFrame:
-    sql = """
-    SELECT *
-    FROM pitching_2_raw
-    WHERE 年度 = ? AND 所属 = ?
-    """
+    teams_2gun = tuple(NPB_TEAMS_1GUN + NPB_TEAMS_2GUN_EXTRA)
+
+    if team == "すべて":
+        sql = f"""
+        SELECT *
+        FROM pitching_2_view
+        WHERE 年度 = ?
+          AND 所属 IN {teams_2gun}
+        ORDER BY 投球回_outs DESC
+        """
+        params = (season,)
+
+    elif team == "イースタン":
+        sql = f"""
+        SELECT *
+        FROM pitching_2_view
+        WHERE 年度 = ?
+          AND 所属 IN {tuple(EASTERN)}
+        ORDER BY 投球回_outs DESC
+        """
+        params = (season,)
+
+    elif team == "ウエスタン":
+        sql = f"""
+        SELECT *
+        FROM pitching_2_view
+        WHERE 年度 = ?
+          AND 所属 IN {tuple(WESTERN)}
+        ORDER BY 投球回_outs DESC
+        """
+        params = (season,)
+
+    else:
+        sql = """
+        SELECT *
+        FROM pitching_2_view
+        WHERE 年度 = ? AND 所属 = ?
+        ORDER BY 投球回_outs DESC
+        """
+        params = (season, team)
+
     with sqlite3.connect(DB_PATH) as con:
-        df = pd.read_sql(sql, con, params=(season, team))
+        df = pd.read_sql(sql, con, params=params)
+
     return df
+
+
+cols_pitching_1 = [
+    "選手名","年齢","投","打","防御率","登板","先発","勝利","敗戦","S","HLD",
+    "完投","完封","無四球","被打者","投球回","被安打","被本塁打","四球","敬遠",
+    "死球","三振","暴投","ボーク","失点","自責点"
+]
+
+cols_pitching_2 = [
+    "選手名","年齢","投","打","防御率","登板","勝利","敗戦","S",
+    "完投","完封","無四球","被打者","投球回","被安打","被本塁打","四球","敬遠",
+    "死球","三振","暴投","ボーク","失点","自責点"
+]
+
+
 
 def get_team_choices(season: int, level: str) -> list[str]:
     """
@@ -528,27 +779,79 @@ with colC:
         if team_changed and is_broad_team:
             st.session_state["pa_filter"] = "規定打席"
 
-    # ===== 打席フィルタ UI =====
+# level別に「広い選択」を定義（ここがブレると所属表示/規定フィルタの初期値が壊れる）
+BROAD_TEAMS_1 = ("すべて", "セリーグ", "パリーグ")
+BROAD_TEAMS_2 = ("すべて", "イースタン", "ウエスタン")
+
+now_team = st.session_state.get("team")
+is_broad_team = (now_team in (BROAD_TEAMS_1 if level == "1軍" else BROAD_TEAMS_2))
+
+
+# team が変わった瞬間を検知
+prev_team = st.session_state.get("_prev_team")
+now_team = st.session_state.get("team")
+team_changed = (prev_team is not None) and (prev_team != now_team)
+st.session_state["_prev_team"] = now_team
+
+# ===== フィルタUI（打者=打席、投手=投球回）=====
+if category == "打者成績":
+    # teamが「広い選択」に変わったら規定打席へ寄せる
+    if "pa_filter" not in st.session_state:
+        st.session_state["pa_filter"] = "規定打席" if is_broad_team else "すべて"
+    else:
+        if team_changed and is_broad_team:
+            st.session_state["pa_filter"] = "規定打席"
+
     pa_options = ["規定打席", "400", "300", "200", "100", "50", "すべて"]
-    st.selectbox(
-        "打席フィルタ",
-        pa_options,
-        key="pa_filter",
-    )
+    st.selectbox("打席フィルタ", pa_options, key="pa_filter")
+
+elif category == "投手成績":
+    # teamが「広い選択」に変わったら規定投球回へ寄せる
+    if "ip_filter" not in st.session_state:
+        st.session_state["ip_filter"] = "規定投球回" if is_broad_team else "すべて"
+    else:
+        if team_changed and is_broad_team:
+            st.session_state["ip_filter"] = "規定投球回"
+
+    ip_options = ["規定投球回", "100", "80", "60", "40", "20", "すべて"]
+    st.selectbox("投球回フィルタ", ip_options, key="ip_filter")
+
 
 # ===== 表示（上部ナビに応じて切り替え）=====
 st.markdown(f"### {level}・{category}")
 
 if level == "1軍" and category == "打者成績":
     df = get_batting_1(season, team)   # batting_1_view
+
 elif level == "2軍" and category == "打者成績":
     df = get_batting_2(season, team)   # batting_2_view
+
 elif level == "1軍" and category == "投手成績":
-    df = get_pitching_1(season, team)
+    df = get_pitching_1(season, team)  # pitching_1_view（投球回_outs DESC）
+
 elif level == "2軍" and category == "投手成績":
-    df = get_pitching_2(season, team)
+    df = get_pitching_2(season, team)  # pitching_2_view（投球回_outs DESC）
+
 else:
     df = pd.DataFrame()
+
+# ---- 投手：投球回表示（"100 1/3" / "100 2/3"）を確実にする ----
+if category == "投手成績" and (not df.empty):
+
+    # まず「投球回(小数)」から outs を作って分数表示にする（※こちらを優先）
+    # 例: 109.666667 -> 329 outs -> "109 2/3"
+    if "投球回" in df.columns:
+        ip_num = pd.to_numeric(df["投球回"], errors="coerce")
+        outs_from_ip = (ip_num * 3).round().astype("Int64")  # 1/3刻み前提で丸め
+        df["投球回"] = outs_from_ip.apply(outs_to_ip_str)
+
+    # 投球回が無い/変換不能の保険：outs列があるならそれを使う
+    if ("投球回" not in df.columns) and ("投球回_outs" in df.columns):
+        df["投球回_outs"] = pd.to_numeric(df["投球回_outs"], errors="coerce").fillna(0).astype(int)
+        df["投球回"] = df["投球回_outs"].apply(outs_to_ip_str)
+
+
+
 
 
 # ===== ハイライト用の母集団（該当年度の全選手、100打席以上） =====
@@ -612,23 +915,15 @@ if category == "打者成績" and not baseline.empty:
 
 
 
-# ===== ここから 1軍打者の整形（崩れない順番で固定）=====
-mode = st.session_state.get("show_mode", "基本")
-show_team_col = team in ("すべて", "セリーグ", "パリーグ", "イースタン", "ウエスタン")
+# 所属列は「すべて/リーグ」だけで表示
+show_team_col = team in (("すべて", "セリーグ", "パリーグ") if level == "1軍" else ("すべて", "イースタン", "ウエスタン"))
 
-# ---- 1) 所属（略称）表示：列名は「所属」、中身だけ略称にする ----
-if (category == "打者成績") and show_team_col and ("所属" in df.columns):
-    df["所属"] = df["所属"].astype(str).str.strip()
-    df["所属"] = df["所属"].map(TEAM_ABBR).fillna(df["所属"])
 
-# ---- 2) 年度は常に落とす。所属は球団指定時のみ落とす ----
-drop_cols = []
-if "年度" in df.columns:
-    drop_cols.append("年度")
-if (not show_team_col) and ("所属" in df.columns):
-    drop_cols.append("所属")
-if drop_cols:
-    df = df.drop(columns=drop_cols, errors="ignore")
+
+# ---- 2) 年度/所属は “ここでは落とさない” ----
+# 理由：投球回フィルタ（規定投球回）で 年度/所属 を使って merge するため
+# ※表示列の整形（列出し分け）の段階で自然に落ちるのでここでは触らない
+
 
 # ---- 3) 投手除外（打者成績のみ）※選手IDが必要なので、ここでは落とさない ----
 if category == "打者成績" and st.session_state.get("hide_pitchers", True) and not df.empty:
@@ -676,15 +971,65 @@ if "打席" in df.columns and pa_filter != "すべて":
         threshold = math.floor(standard_games * factor)
         df = df[df["打席"] >= threshold]
 
+# ---- 投手：投球回フィルタ ----
+if category == "投手成績" and (not df.empty) and ("投球回_outs" in df.columns):
+    ip_filter = st.session_state.get("ip_filter", "すべて")
+
+    df["投球回_outs"] = pd.to_numeric(df["投球回_outs"], errors="coerce").fillna(0).astype(int)
+
+    if ip_filter != "すべて":
+        if ip_filter in ["20", "40", "60", "80", "100"]:
+            thr_outs = int(float(ip_filter) * 3)
+            df = df[df["投球回_outs"] >= thr_outs].copy()
+
+        elif ip_filter == "規定投球回":
+            games_df = get_team_games_by_level(season, level)  # 年度, 所属, 試合数
+            games_df["試合数"] = pd.to_numeric(games_df["試合数"], errors="coerce").fillna(0)
+
+            # 規定係数：1軍=1.0、2軍=0.8
+            factor = 1.0 if level == "1軍" else 0.8
+
+            # 所属で結合して、行ごとに規定を計算
+            df = df.merge(games_df, on=["年度", "所属"], how="left")
+            df["試合数"] = pd.to_numeric(df["試合数"], errors="coerce").fillna(0)
+            df["規定投球回_outs"] = (df["試合数"] * 3.0 * factor).round().astype(int)
+
+            df = df[df["投球回_outs"] >= df["規定投球回_outs"]].copy()
+
+# ---- 所属略称化は「規定投球回のmerge後」に行う（merge一致が壊れるため）----
+if show_team_col and ("所属" in df.columns):
+    df["所属"] = df["所属"].astype(str).str.strip()
+    df["所属"] = df["所属"].map(TEAM_ABBR).fillna(df["所属"])
+
+# ---- 投手：投球回の表示を必ず "xx 1/3" / "xx 2/3" に統一する ----
+if category == "投手成績" and (not df.empty):
+
+    # ★最優先：outs があるなら必ず outs から作り直す（端数情報の源泉）
+    if "投球回_outs" in df.columns:
+        df["投球回_outs"] = pd.to_numeric(df["投球回_outs"], errors="coerce").fillna(0).astype(int)
+        df["投球回"] = df["投球回_outs"].apply(outs_to_ip_str)
+
+    # outs が無い場合だけ、投球回（文字列/小数）を整形する（保険）
+    elif "投球回" in df.columns:
+        df["投球回"] = df["投球回"].apply(ip_to_ip_str)
+
 # ---- 5) デフォルトソート（打者：打席降順） ----
 if level in ("1軍", "2軍") and category == "打者成績" and "打席" in df.columns:
     df = df.sort_values("打席", ascending=False, na_position="last")
 
 # ---- 6) 列出し分け（基本/アドバンスド） ----
-if level in ("1軍", "2軍") and category == "打者成績":
+if level in ("1軍", "2軍") and category in ("打者成績", "投手成績"):
+    mode = st.session_state.get("show_mode", "基本")
     key = (level, category, mode)
     if key in DISPLAY_COLUMNS:
         cols = DISPLAY_COLUMNS[key]
+
+        if (not show_team_col) and ("所属" in cols):
+            cols = [c for c in cols if c != "所属"]
+
+        # ★「すべて/リーグ」の時は “所属” を先頭に表示（略称化済みの所属を見せる）
+        if show_team_col and ("所属" in df.columns) and ("所属" not in cols):
+            cols = ["所属"] + cols
 
         # 得点圏打率は 1軍のみ 2016年未満で落とす（2軍はそもそも列セットに無い）
         if level == "1軍" and season < 2016 and "得点圏打率" in cols:
@@ -692,6 +1037,10 @@ if level in ("1軍", "2軍") and category == "打者成績":
 
         cols_exist = [c for c in cols if c in df.columns]
         df = df[cols_exist]
+
+if (not show_team_col) and ("所属" in df.columns):
+    df = df.drop(columns=["所属"], errors="ignore")
+
 
 # ---- 7) ここで「選手ID」を確実に非表示（でも上の処理では使える） ----
 df = df.drop(columns=["選手ID"], errors="ignore")
@@ -730,7 +1079,8 @@ def fmt_percent_1(x):
 INT_COLS = [
     "年齢", "試合", "打席", "打数", "得点", "安打", "二塁打", "三塁打", "本塁打",
     "塁打", "打点", "三振", "四球", "敬遠", "死球", "犠打", "犠飛",
-    "盗塁", "盗塁死", "併殺打",
+    "盗塁", "盗塁死", "併殺打","登板","先発","勝利","敗戦","S","HLD","完投","完封","無四球","被打者","被安打","被本塁打","暴投","ボーク","失点","自責点"
+
 ]
 int_cols_exist = [c for c in INT_COLS if c in df.columns]
 for c in int_cols_exist:
@@ -827,14 +1177,94 @@ if "所属" in df.columns:
 else:
     table_styles.append({"selector": "tbody tr td:nth-child(1)", "props": [("text-align", "left !important")]})
 
+# 投球回を左寄せ＆省略（…）されないようにする（JSに依存しない）
+if "投球回" in df.columns:
+    ip_idx = list(df.columns).index("投球回") + 1  # nth-childは1始まり
+    table_styles.append({
+        "selector": f"thead th:nth-child({ip_idx})",
+        "props": [
+            ("text-align", "left !important"),
+            ("min-width", "90px !important"),
+            ("max-width", "90px !important"),
+            ("width", "90px !important"),
+        ],
+    })
+    table_styles.append({
+        "selector": f"tbody td:nth-child({ip_idx})",
+        "props": [
+            ("text-align", "left !important"),
+            ("min-width", "90px !important"),
+            ("max-width", "90px !important"),
+            ("width", "90px !important"),
+            ("overflow", "visible !important"),
+            ("text-overflow", "clip !important"),
+        ],
+    })
+
+if "投球回" in fmt:
+    del fmt["投球回"]
+
 # 5) Styler：順番を固定（apply → format → styles）
 styler = df.style
 styler = styler.apply(apply_heatmap, axis=None)  # 背景色（数値が必要）
 styler = styler.format(fmt)                      # 表示形式
 styler = styler.set_table_styles(table_styles)   # CSS
 
-html_table = styler.hide(axis="index").to_html()
+# 投球回は左寄せ（Styler側でも明示しておく）
+if "投球回" in df.columns:
+    styler = styler.set_properties(subset=["投球回"], **{"text-align": "left !important"})
 
+
+# --- 投球回列の位置（HTML nth-child用）を特定 ---
+ip_col_idx = None
+if "投球回" in df.columns:
+    ip_col_idx = list(df.columns).index("投球回") + 1  # nth-childは1始まり
+
+# --- 「選手名列」を特定（JS側で左寄せクラス付与に使う）---
+name_col = None
+for cand in ["選手名", "名前", "選手"]:
+    if cand in df.columns:
+        name_col = cand
+        break
+if name_col is None and len(df.columns) > 0:
+    name_col = df.columns[0]
+if name_col is None:
+    name_col = ""
+
+# --- 数値列（指標列）を特定（JS側で固定幅クラス付与に使う）---
+metric_cols = []
+for c in df.columns:
+    try:
+        if pd.api.types.is_numeric_dtype(df[c]):
+            metric_cols.append(str(c))
+    except Exception:
+        pass
+
+# JSに渡す用（Python list をそのまま JS Array として埋め込む）
+metric_cols_js = repr(metric_cols)
+
+# 投球回列専用CSS（左寄せ＋幅確保＋省略しない）
+ip_col_css = ""
+if ip_col_idx is not None:
+    ip_col_css = f"""
+  /* 投球回列だけ：左寄せ + 省略しない + 幅を確保 */
+  thead th:nth-child({ip_col_idx}) {{
+    text-align: left !important;
+    min-width: 90px !important;
+    width: 90px !important;
+    max-width: 90px !important;
+  }}
+  tbody td:nth-child({ip_col_idx}) {{
+    text-align: left !important;
+    min-width: 90px !important;
+    width: 90px !important;
+    max-width: 90px !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+  }}
+"""
+
+html_table = styler.hide(axis="index").to_html()
 
 full_html = f"""
 <!doctype html>
@@ -858,54 +1288,53 @@ full_html = f"""
     --td-pad-y: 7px;
     --td-pad-x: 10px;
 
-    /* 打率以降の統一列幅（PC） */
+    /* 指標列の統一幅（PC） */
     --w-metric: 78px;
 
-    /* 選手名列：5文字が入るくらい */
+    /* 選手名列：5文字程度 */
     --w-name: 96px;
-
-    /* 所属列：2文字が入るくらい */
-    --w-team: 44px;
-
-    /* スマホ時の行高さ（行単位感を出す） */
-    --row-h: 36px;
   }}
 
-  body {{
-    margin: 0;
-    background: #ffffff;
-    color: var(--text);
-    font-family: Meiryo, "メイリオ", "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif;
-  }}
-
-  /* テーブル内スクロール（縦スクロールは現状維持） */
-  .npb-table-wrap {{
+  /* 外枠（★内部スクロールを復活させる） */
+  .tbl-wrap {{
+    width: 100%;
     overflow: auto;
-    max-height: 86vh;
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    background: #ffffff;
     box-shadow: var(--shadow);
+    background: white;
+
+    /* ★重要：高さ制約がないとスクロールが発動しない */
+    max-height: 720px;   /* PC */
+  }}
+
+  /* モバイルは画面に合わせる */
+  @media (max-width: 768px) {{
+    .tbl-wrap {{
+      max-height: 65vh;
+    }}
   }}
 
   table {{
-    border-collapse: collapse;
-    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    width: max-content;
+    min-width: 100%;
+    color: var(--text);
   }}
 
-  /* 1行目（ヘッダー固定：テーブル内スクロールに対して固定されます） */
   thead th {{
     position: sticky;
     top: 0;
-    z-index: 30;
-    background: #ffffff;
-    border: 1px solid var(--border);
+    z-index: 2;
+    background: #f9fafb;
+    border-bottom: 1px solid var(--border);
+    border-right: 1px solid var(--border2);
     padding: var(--th-pad-y) var(--th-pad-x);
     font-size: var(--th-font);
-    font-weight: 600;
+    font-weight: 700;
     white-space: nowrap;
     text-align: center;
-    cursor: pointer;
   }}
 
   tbody td {{
@@ -919,202 +1348,119 @@ full_html = f"""
     background: #ffffff;
   }}
 
-  tbody tr:hover td {{
-    background: rgba(37,99,235,0.06);
+  /* 指標列は固定幅（数値列） */
+  tbody td.metric, thead th.metric {{
+    min-width: var(--w-metric);
+    width: var(--w-metric);
+    max-width: var(--w-metric);
   }}
 
-  /* ===== スマホだけ：文字/余白/列幅を小さく + スクロール感を整える ===== */
+  /* 選手名列は固定幅（5文字程度） */
+  tbody td.name, thead th.name {{
+    min-width: var(--w-name);
+    width: var(--w-name);
+    max-width: var(--w-name);
+    text-align: left;
+  }}
+
+  /* 右端の余白カット */
+  thead th:last-child, tbody td:last-child {{
+    border-right: 0;
+  }}
+
+  /* ★投球回列だけ上書き（左寄せ・省略なし） */
+  {ip_col_css}
+
+  /* スマホでは少し詰める（既存維持） */
   @media (max-width: 768px) {{
     :root {{
-      --th-font: 11px;
-      --td-font: 12px;
-      --th-pad-y: 6px;
-      --th-pad-x: 7px;
-      --td-pad-y: 5px;
-      --td-pad-x: 7px;
-
-      --w-metric: 66px;
-      --w-name: 84px;
-      --w-team: 38px;
-
-      --row-h: 34px;
-    }}
-
-    /* “ぬるっとしすぎる”慣性を弱める（好みで touch に戻してOK） */
-    .npb-table-wrap {{
-      -webkit-overflow-scrolling: auto;
-    }}
-
-    /* 行単位感：高さ固定 */
-    tbody tr {{
-      height: var(--row-h);
-    }}
-    tbody td {{
-      line-height: var(--row-h);
-      padding-top: 0;
-      padding-bottom: 0;
+      --th-font: 12px;
+      --td-font: 13px;
+      --th-pad-y: 7px;
+      --th-pad-x: 8px;
+      --td-pad-y: 6px;
+      --td-pad-x: 8px;
+      --w-metric: 72px;
+      --w-name: 90px;
     }}
   }}
 </style>
 </head>
-
 <body>
-  <div class="npb-table-wrap">
-    {html_table}
-  </div>
+<div class="tbl-wrap">
+{html_table}
+</div>
 
 <script>
-(function() {{
-  function getValue(row, idx) {{
-    const t = row.children[idx].innerText.trim();
-    if (t === "-" || t === "") return null;
-    const n = Number(t.replace("%","").replace(/^\\./,"0."));
-    return isNaN(n) ? t : n;
-  }}
+(() => {{
+  const wrap = document.querySelector(".tbl-wrap");
+  const table = wrap?.querySelector("table");
+  if (!table) return;
 
-  function sortTable(table, col, asc) {{
-    const tb = table.tBodies[0];
-    const rows = Array.from(tb.rows);
-    rows.sort((a, b) => {{
-      const A = getValue(a, col);
-      const B = getValue(b, col);
-      if (A === null && B === null) return 0;
-      if (A === null) return 1;
-      if (B === null) return -1;
-      if (typeof A === "number" && typeof B === "number") {{
-        return asc ? A - B : B - A;
-      }}
-      return asc
-        ? String(A).localeCompare(String(B), "ja")
-        : String(B).localeCompare(String(A), "ja");
-    }});
-    rows.forEach(r => tb.appendChild(r));
-  }}
+  // th/td にクラス付与（名前列・指標列）
+  const ths = table.querySelectorAll("thead th");
+  const metricSet = new Set({metric_cols_js});
 
-  function injectColWidthStyle(colIndex1Based, px, extra="") {{
-    const css = document.createElement("style");
-    css.textContent = `
-      thead th:nth-child(${{colIndex1Based}}),
-      tbody td:nth-child(${{colIndex1Based}}) {{
-        width: ${{px}}px !important;
-        min-width: ${{px}}px !important;
-        max-width: ${{px}}px !important;
-        ${{extra}}
-      }}
-    `;
-    document.head.appendChild(css);
-  }}
-
-  // ★固定列は「選手名」だけ（所属が1列目にあっても固定しない）
-  function freezeNameColumn(ths, headerToIndex) {{
-    if (!headerToIndex.has("選手名")) return;
-    const idx1 = headerToIndex.get("選手名");  // 1-based
-    const idx0 = idx1 - 1;
-    const th = ths[idx0];
-    if (!th) return;
-
-    const css = document.createElement("style");
-    css.textContent = `
-      thead th:nth-child(${{idx1}}) {{
-        position: sticky !important;
-        left: 0px !important;
-        z-index: 60 !important; /* 角（ヘッダー×固定列）を最前面に */
-        background: rgba(255,255,255,0.98) !important;
-        box-shadow: 6px 0 8px rgba(17,24,39,0.10);
-      }}
-      tbody td:nth-child(${{idx1}}) {{
-        position: sticky !important;
-        left: 0px !important;
-        z-index: 50 !important;
-        background: rgba(255,255,255,0.98) !important;
-        box-shadow: 6px 0 8px rgba(17,24,39,0.10);
-      }}
-    `;
-    document.head.appendChild(css);
-  }}
-
-  function autoShrinkNameCells(table, nameIdx1) {{
-    const base = parseInt(getComputedStyle(document.documentElement).getPropertyValue("--td-font")) || 14;
-    const minSize = 9;
-    const cells = Array.from(table.querySelectorAll(`tbody td:nth-child(${{nameIdx1}})`));
-
-    cells.forEach(td => {{
-      const text = td.innerText.trim();
-      if (!text) return;
-
-      const len = text.length;
-      if (len <= 5) {{
-        td.style.fontSize = `${{base}}px`;
-        return;
-      }}
-      const newSize = Math.max(minSize, base - (len - 5));
-      td.style.fontSize = `${{newSize}}px`;
-    }});
-  }}
-
-  function bind() {{
-    const table = document.querySelector("table");
-    if (!table) return;
-
-    const ths = Array.from(table.querySelectorAll("thead th"));
-    const headerToIndex = new Map();
-    ths.forEach((th, i) => headerToIndex.set(th.innerText.trim(), i + 1));
-
-    /* 列幅 */
-    if (headerToIndex.has("所属")) {{
-      const wTeam = parseInt(getComputedStyle(document.documentElement).getPropertyValue("--w-team")) || 44;
-      injectColWidthStyle(headerToIndex.get("所属"), wTeam);
-    }}
-
-    if (headerToIndex.has("選手名")) {{
-      const idx = headerToIndex.get("選手名");
-      const wName = parseInt(getComputedStyle(document.documentElement).getPropertyValue("--w-name")) || 96;
-      injectColWidthStyle(idx, wName, "text-align:left !important;");
-      autoShrinkNameCells(table, idx);
-    }}
-
-    if (headerToIndex.has("年齢")) injectColWidthStyle(headerToIndex.get("年齢"), 34);
-    if (headerToIndex.has("投")) injectColWidthStyle(headerToIndex.get("投"), 34);
-    if (headerToIndex.has("打")) injectColWidthStyle(headerToIndex.get("打"), 34);
-    if (headerToIndex.has("打席")) injectColWidthStyle(headerToIndex.get("打席"), 64);
-    if (headerToIndex.has("得点圏打率")) injectColWidthStyle(headerToIndex.get("得点圏打率"), 72);
-
-    /* 打率以降を同じ幅に */
-    if (headerToIndex.has("打率")) {{
-      const start = headerToIndex.get("打率");
-      const metricWidth = getComputedStyle(document.documentElement)
-        .getPropertyValue("--w-metric").trim() || "78px";
-      const w = parseInt(metricWidth.replace("px",""), 10) || 78;
-      for (let i = start; i <= ths.length; i++) {{
-        injectColWidthStyle(i, w);
-      }}
-    }}
-
-    /* ★固定：選手名 */
-    freezeNameColumn(ths, headerToIndex);
-
-    /* ソート */
-    ths.forEach((th, idx0) => {{
-      if (th.dataset.bound === "1") return;
-      th.dataset.bound = "1";
-      th.dataset.asc = "0";
-      th.addEventListener("click", () => {{
-        const asc = th.dataset.asc === "1";
-        sortTable(table, idx0, asc);
-        th.dataset.asc = asc ? "0" : "1";
+  ths.forEach((th, idx0) => {{
+    const colName = th.textContent?.trim() || "";
+    if (colName === "{name_col}") {{
+      th.classList.add("name");
+      table.querySelectorAll(`tbody tr`).forEach(tr => {{
+        const td = tr.children[idx0];
+        if (td) td.classList.add("name");
       }});
-    }});
+    }} else if (metricSet.has(colName)) {{
+      th.classList.add("metric");
+      table.querySelectorAll(`tbody tr`).forEach(tr => {{
+        const td = tr.children[idx0];
+        if (td) td.classList.add("metric");
+      }});
+    }}
+  }});
+
+  // ソート（クリックで昇順↔降順）
+  function getCellValue(tr, idx) {{
+    const td = tr.children[idx];
+    if (!td) return "";
+    return td.textContent.trim();
   }}
 
-  bind();
+  function parseVal(v) {{
+    const n = Number(v.replace(/,/g, ""));
+    if (!Number.isNaN(n)) return n;
+    return v;
+  }}
+
+  function sortTable(tbl, colIdx, asc) {{
+    const tbody = tbl.tBodies[0];
+    const rows = Array.from(tbody.rows);
+    rows.sort((a, b) => {{
+      const va = parseVal(getCellValue(a, colIdx));
+      const vb = parseVal(getCellValue(b, colIdx));
+      if (typeof va === "number" && typeof vb === "number") {{
+        return asc ? va - vb : vb - va;
+      }}
+      return asc ? String(va).localeCompare(String(vb)) : String(vb).localeCompare(String(va));
+    }});
+    rows.forEach(r => tbody.appendChild(r));
+  }}
+
+  ths.forEach((th, idx0) => {{
+    if (th.dataset.bound === "1") return;
+    th.dataset.bound = "1";
+    th.dataset.asc = "0";
+    th.addEventListener("click", () => {{
+      const asc = th.dataset.asc === "1";
+      sortTable(table, idx0, asc);
+      th.dataset.asc = asc ? "0" : "1";
+    }});
+  }});
 }})();
 </script>
 </body>
 </html>
 """
 
-
-# 例：スマホは iframe 高さを大きくして「画面スクロールに統一」
 row_h = 34 if is_mobile else 0
 if is_mobile:
     # ヘッダー1行 + データ行 + 余白
@@ -1123,7 +1469,3 @@ if is_mobile:
     components.html(full_html, height=est_h, scrolling=False)
 else:
     components.html(full_html, height=820, scrolling=False)
-
-
-
-
