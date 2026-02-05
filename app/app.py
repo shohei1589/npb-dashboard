@@ -108,23 +108,28 @@ def diverging_color(p: float) -> str:
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DB_PATH = PROJECT_ROOT / "data" / "npb.sqlite"
 
-st.sidebar.caption(f"DB_PATH: {DB_PATH}")
-st.sidebar.caption(f"DB exists: {DB_PATH.exists()}")
-
 def ensure_views_updated_or_show_error():
     sql_path = PROJECT_ROOT / "scripts" / "create_views.sql"
     try:
+        if not DB_PATH.exists():
+            raise FileNotFoundError(f"DBが見つかりません: {DB_PATH}")
+
         if not sql_path.exists():
-            raise FileNotFoundError(f"create_views.sql not found: {sql_path}")
+            raise FileNotFoundError(f"create_views.sql が見つかりません: {sql_path}")
+
         with sqlite3.connect(DB_PATH) as con:
             con.executescript(sql_path.read_text(encoding="utf-8"))
             con.commit()
+
     except Exception as e:
-        st.error("VIEW更新に失敗しました（Cloud側のDB/SQL配置を確認してください）")
+        st.error("DBのVIEW作成に失敗しました（Cloud側）")
         st.code(repr(e))
         st.stop()
 
 ensure_views_updated_or_show_error()
+
+st.sidebar.caption(f"DB_PATH: {DB_PATH}")
+st.sidebar.caption(f"DB exists: {DB_PATH.exists()}")
 
 def ensure_views_updated():
     sql_path = PROJECT_ROOT / "scripts" / "create_views.sql"

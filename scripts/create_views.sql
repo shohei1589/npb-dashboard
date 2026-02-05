@@ -259,3 +259,103 @@ SELECT
   ) / 4.0 AS Spd
 
 FROM batting_2_raw;
+
+DROP VIEW IF EXISTS pitching_1_view;
+
+CREATE VIEW pitching_1_view AS
+SELECT
+  年度,
+  所属,
+  選手名,
+  選手ID,
+  年齢,
+  投,
+  打,
+
+  -- 防御率（outsから計算）
+  printf('%.2f',
+    CASE WHEN 投球回_outs > 0 THEN (自責点 * 27.0 / 投球回_outs) END
+  ) AS 防御率,
+
+  登板,
+  先発,
+  勝利,
+  敗戦,
+  S,
+  HLD,
+  完投,
+  完封,
+  無四球,
+  被打者,
+
+  投球回_outs,
+
+  -- ★ここが重要：分数投球回を生成
+  CASE
+    WHEN 投球回_outs IS NULL THEN NULL
+    WHEN (投球回_outs % 3) = 0 THEN CAST(投球回_outs/3 AS TEXT)
+    WHEN (投球回_outs % 3) = 1 THEN CAST(投球回_outs/3 AS TEXT) || ' 1/3'
+    WHEN (投球回_outs % 3) = 2 THEN CAST(投球回_outs/3 AS TEXT) || ' 2/3'
+  END AS 投球回,
+
+  被安打,
+  被本塁打,
+  四球,
+  敬遠,
+  死球,
+  三振,
+  暴投,
+  ボーク,
+  失点,
+  自責点
+
+FROM pitching_1_raw;
+
+DROP VIEW IF EXISTS pitching_2_view;
+
+CREATE VIEW pitching_2_view AS
+SELECT
+  年度,
+  所属,
+  選手名,
+  選手ID,
+  年齢,
+  投,
+  打,
+
+  -- 防御率（outsから計算）
+  printf('%.2f',
+    CASE WHEN 投球回_outs > 0 THEN (自責点 * 27.0 / 投球回_outs) END
+  ) AS 防御率,
+
+  登板,
+  勝利,
+  敗戦,
+  S,
+  完投,
+  完封,
+  無四球,
+  被打者,
+
+  投球回_outs,
+
+  -- ★分数投球回（表示用）
+  CASE
+    WHEN 投球回_outs IS NULL THEN NULL
+    WHEN (投球回_outs % 3) = 0 THEN CAST(投球回_outs/3 AS TEXT)
+    WHEN (投球回_outs % 3) = 1 THEN CAST(投球回_outs/3 AS TEXT) || ' 1/3'
+    WHEN (投球回_outs % 3) = 2 THEN CAST(投球回_outs/3 AS TEXT) || ' 2/3'
+  END AS 投球回,
+
+  被安打,
+  被本塁打,
+  四球,
+  敬遠,
+  死球,
+  三振,
+  暴投,
+  ボーク,
+  失点,
+  自責点
+
+FROM pitching_2_raw;
