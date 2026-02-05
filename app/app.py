@@ -108,6 +108,17 @@ def diverging_color(p: float) -> str:
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DB_PATH = PROJECT_ROOT / "data" / "npb.sqlite"
 
+def ensure_views_updated():
+    sql_path = PROJECT_ROOT / "scripts" / "create_views.sql"
+    if not sql_path.exists():
+        return
+    with sqlite3.connect(DB_PATH) as con:
+        con.executescript(sql_path.read_text(encoding="utf-8"))
+        con.commit()
+
+# 起動時にviewを最新化（デプロイ環境でも反映されるように）
+ensure_views_updated()
+
 # ===== NPB 球団定義 =====
 NPB_TEAMS_1GUN = [
     "ソフトバンク", "日本ハム", "オリックス", "楽天", "西武", "ロッテ",
@@ -141,27 +152,6 @@ is_mobile = str(params.get("mobile", "0")) == "1"
 # ===== スマホ判定（画面幅）=====
 # 既に is_mobile を作っているならここは不要。無ければ導入する。
 is_mobile = st.session_state.get("is_mobile", False)
-
-
-# （任意）簡易にスマホ判定をしたい場合は query_params で運用する方法もあるが、
-# ここでは「is_mobile がどこかで入っている」前提にしています。
-
-# ===== スマホだけ表示行数を制限 =====
-if is_mobile:
-    st.caption("📱 スマホ表示：上位のみ表示（打席順）")
-    n_rows = st.selectbox(
-        "表示人数",
-        options=[50, 100, 200, "全件"],
-        index=0,
-        key="mobile_n_rows",
-    )
-
-    # 打席順（デフォルト）で上位N
-    if "打席" in df.columns:
-        df = df.sort_values("打席", ascending=False)
-
-    if n_rows != "全件":
-        df = df.head(int(n_rows))
 
 
 # ===== リーグ定義 =====
@@ -227,16 +217,16 @@ DISPLAY_COLUMNS = {
 }
 
 @st.cache_data
-def get_team_games_by_level(season: int, level: str) -> pd.DataFrame:
-    view = "batting_1_view" if level == "1軍" else "batting_2_view"
+def get_team_pitching_apps(season: int, level: str) -> pd.DataFrame:
+    table = "team_pitching_1" if level == "1軍" else "team_pitching_2"
     sql = f"""
-    SELECT 年度, 所属, MAX(COALESCE(試合,0)) AS 試合数
-    FROM {view}
+    SELECT 年度, 所属, COALESCE(登板,0) AS 登板数
+    FROM {table}
     WHERE 年度 = ?
-    GROUP BY 年度, 所属
     """
     with sqlite3.connect(DB_PATH) as con:
         return pd.read_sql(sql, con, params=(season,))
+
 
 @st.cache_data
 def get_seasons() -> list[int]:
@@ -835,6 +825,19 @@ elif level == "2軍" and category == "投手成績":
 else:
     df = pd.DataFrame()
 
+# ===== スマホだけ表示行数を制限（df作成後が正しい） =====
+if is_mobile and (not df.empty):
+    st.caption("📱 スマホ表示：上位のみ表示")
+    n_rows = st.selectbox("表示人数", options=[50, 100, 200, "全件"], index=0, key="mobile_n_rows")
+
+    if n_rows != "全件":
+        if category == "打者成績" and "打席" in df.columns:
+            df = df.sort_values("打席", ascending=False).head(int(n_rows))
+        elif category == "投手成績" and "投球回_outs" in df.columns:
+            df = df.sort_values("投球回_outs", ascending=False).head(int(n_rows))
+        else:
+            df = df.head(int(n_rows))
+
 # ---- 投手：投球回表示（"100 1/3" / "100 2/3"）を確実にする ----
 if category == "投手成績" and (not df.empty):
 
@@ -983,16 +986,16 @@ if category == "投手成績" and (not df.empty) and ("投球回_outs" in df.col
             df = df[df["投球回_outs"] >= thr_outs].copy()
 
         elif ip_filter == "規定投球回":
-            games_df = get_team_games_by_level(season, level)  # 年度, 所属, 試合数
-            games_df["試合数"] = pd.to_numeric(games_df["試合数"], errors="coerce").fillna(0)
+            apps_df = get_team_pitching_apps(season, level)  # 年度, 所属, 登板数
+            apps_df["登板数"] = pd.to_numeric(apps_df["登板数"], errors="coerce").fillna(0)
 
             # 規定係数：1軍=1.0、2軍=0.8
             factor = 1.0 if level == "1軍" else 0.8
 
             # 所属で結合して、行ごとに規定を計算
-            df = df.merge(games_df, on=["年度", "所属"], how="left")
-            df["試合数"] = pd.to_numeric(df["試合数"], errors="coerce").fillna(0)
-            df["規定投球回_outs"] = (df["試合数"] * 3.0 * factor).round().astype(int)
+            df = df.merge(apps_df, on=["年度", "所属"], how="left")
+            df["登板数"] = pd.to_numeric(df["登板数"], errors="coerce").fillna(0)
+            df["規定投球回_outs"] = (df["登板数"] * factor * 3.0).round().astype(int)
 
             df = df[df["投球回_outs"] >= df["規定投球回_outs"]].copy()
 
@@ -1220,6 +1223,39 @@ ip_col_idx = None
 if "投球回" in df.columns:
     ip_col_idx = list(df.columns).index("投球回") + 1  # nth-childは1始まり
 
+# --- 年齢/防御率列の位置（HTML nth-child用）を特定 ---
+age_col_idx = None
+era_col_idx = None
+if "年齢" in df.columns:
+    age_col_idx = list(df.columns).index("年齢") + 1
+if "防御率" in df.columns:
+    era_col_idx = list(df.columns).index("防御率") + 1
+
+age_col_css = ""
+if age_col_idx is not None:
+    age_col_css = f"""
+  /* 年齢列：狭くする */
+  thead th:nth-child({age_col_idx}),
+  tbody td:nth-child({age_col_idx}) {{
+    min-width: 56px !important;
+    width: 56px !important;
+    max-width: 56px !important;
+  }}
+"""
+
+era_col_css = ""
+if era_col_idx is not None:
+    era_col_css = f"""
+  /* 防御率列：広くする */
+  thead th:nth-child({era_col_idx}),
+  tbody td:nth-child({era_col_idx}) {{
+    min-width: 92px !important;
+    width: 92px !important;
+    max-width: 92px !important;
+  }}
+"""
+
+
 # --- 「選手名列」を特定（JS側で左寄せクラス付与に使う）---
 name_col = None
 for cand in ["選手名", "名前", "選手"]:
@@ -1295,7 +1331,7 @@ full_html = f"""
     --w-name: 96px;
   }}
 
-  /* 外枠（★内部スクロールを復活させる） */
+  /* 外枠（内部スクロール） */
   .tbl-wrap {{
     width: 100%;
     overflow: auto;
@@ -1303,8 +1339,6 @@ full_html = f"""
     border-radius: var(--radius);
     box-shadow: var(--shadow);
     background: white;
-
-    /* ★重要：高さ制約がないとスクロールが発動しない */
     max-height: 720px;   /* PC */
   }}
 
@@ -1355,7 +1389,7 @@ full_html = f"""
     max-width: var(--w-metric);
   }}
 
-  /* 選手名列は固定幅（5文字程度） */
+  /* 選手名列は固定幅 */
   tbody td.name, thead th.name {{
     min-width: var(--w-name);
     width: var(--w-name);
@@ -1363,15 +1397,27 @@ full_html = f"""
     text-align: left;
   }}
 
+  /* ★選手名が溢れるセルだけフォントを小さくする */
+  tbody td.name.shrink {{
+    font-size: calc(var(--td-font) - 2px);
+  }}
+  @media (max-width: 768px) {{
+    tbody td.name.shrink {{
+      font-size: calc(var(--td-font) - 1px);
+    }}
+  }}
+
   /* 右端の余白カット */
   thead th:last-child, tbody td:last-child {{
     border-right: 0;
   }}
 
-  /* ★投球回列だけ上書き（左寄せ・省略なし） */
+  /* ★投球回・年齢・防御率の列幅等（Pythonで生成したCSSを差し込み） */
   {ip_col_css}
+  {age_col_css}
+  {era_col_css}
 
-  /* スマホでは少し詰める（既存維持） */
+  /* スマホでは少し詰める */
   @media (max-width: 768px) {{
     :root {{
       --th-font: 12px;
@@ -1418,6 +1464,13 @@ full_html = f"""
     }}
   }});
 
+  // ★選手名セルがはみ出していたらフォント縮小
+  table.querySelectorAll("tbody td.name").forEach(td => {{
+    if (td.scrollWidth > td.clientWidth + 1) {{
+      td.classList.add("shrink");
+    }}
+  }});
+
   // ソート（クリックで昇順↔降順）
   function getCellValue(tr, idx) {{
     const td = tr.children[idx];
@@ -1443,6 +1496,14 @@ full_html = f"""
       return asc ? String(va).localeCompare(String(vb)) : String(vb).localeCompare(String(va));
     }});
     rows.forEach(r => tbody.appendChild(r));
+
+    // ソート後に幅判定をやり直す（行の並びが変わるだけなので軽い）
+    table.querySelectorAll("tbody td.name").forEach(td => {{
+      td.classList.remove("shrink");
+      if (td.scrollWidth > td.clientWidth + 1) {{
+        td.classList.add("shrink");
+      }}
+    }});
   }}
 
   ths.forEach((th, idx0) => {{
