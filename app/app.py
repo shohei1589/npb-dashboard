@@ -128,6 +128,29 @@ def ensure_views_updated_or_show_error():
 
 ensure_views_updated_or_show_error()
 
+def debug_db_schema():
+    try:
+        with sqlite3.connect(DB_PATH) as con:
+            # pitching_1_raw の列
+            cur = con.execute("PRAGMA table_info('pitching_1_raw')")
+            cols_raw = [r[1] for r in cur.fetchall()]
+
+            # pitching_1_view の列
+            cur = con.execute("PRAGMA table_info('pitching_1_view')")
+            cols_view = [r[1] for r in cur.fetchall()]
+
+        st.sidebar.subheader("DBスキーマ確認（デバッグ）")
+        st.sidebar.caption("pitching_1_raw columns:")
+        st.sidebar.code(cols_raw)
+        st.sidebar.caption("pitching_1_view columns:")
+        st.sidebar.code(cols_view)
+
+    except Exception as e:
+        st.sidebar.error("スキーマ確認で失敗")
+        st.sidebar.code(repr(e))
+
+debug_db_schema()
+
 st.sidebar.caption(f"DB_PATH: {DB_PATH}")
 st.sidebar.caption(f"DB exists: {DB_PATH.exists()}")
 

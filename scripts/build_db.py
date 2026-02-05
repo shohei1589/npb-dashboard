@@ -5,6 +5,8 @@ from pathlib import Path
 import pandas as pd
 
 
+
+
 # ===== 設定 =====
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 EXCEL_PATH = PROJECT_ROOT / "NPBデータ.xlsx"
@@ -29,6 +31,35 @@ def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
         .str.strip()
     )
     return df
+
+def innings_to_outs(x) -> int:
+    if pd.isna(x):
+        return 0
+    s = str(x).strip()
+
+    # "100 1/3" 形式
+    if " " in s and "/" in s:
+        ip, frac = s.split(" ", 1)
+        ip = int(float(ip))
+        frac = frac.strip()
+        if frac == "1/3":
+            return ip * 3 + 1
+        if frac == "2/3":
+            return ip * 3 + 2
+        return ip * 3
+
+    # 100.1 / 100.2 形式
+    try:
+        v = float(s)
+        ip = int(v)
+        frac = round(v - ip, 3)
+        if abs(frac - 0.1) < 1e-6:
+            return ip * 3 + 1
+        if abs(frac - 0.2) < 1e-6:
+            return ip * 3 + 2
+        return ip * 3
+    except Exception:
+        return 0
 
 def read_players_sheet(excel_path: Path, sheet_name: str) -> pd.DataFrame:
     """
@@ -147,31 +178,57 @@ def build_batting_2_raw(df: pd.DataFrame) -> pd.DataFrame:
 def build_pitching_1_raw(df: pd.DataFrame) -> pd.DataFrame:
     df = normalize_columns(df)
 
+    # 表記ゆれ寄せ
     rename_map = {}
     if "Ｓ" in df.columns and "S" not in df.columns:
         rename_map["Ｓ"] = "S"
-    if "ＨＰ" in df.columns and "HP" not in df.columns:
-        rename_map["ＨＰ"] = "HP"
     if "回数" in df.columns and "投球回" not in df.columns:
         rename_map["回数"] = "投球回"
+    if "自責" in df.columns and "自責点" not in df.columns:
+        rename_map["自責"] = "自責点"
+    if "自責点" in df.columns and "自責点" not in df.columns:
+        rename_map["自責点"] = "自責点"
     if rename_map:
         df = df.rename(columns=rename_map)
+    if "投球回" in df.columns:
+        df["投球回_outs"] = df["投球回"].apply(innings_to_outs)
 
-    # 1軍投手の固定値（存在しない列があっても落ちないように後で絞る）
+    # ★投球回outsを作る（ソート用）
+    if "投球回" in df.columns:
+        df["投球回_outs"] = df["投球回"].apply(innings_to_outs)
+
+    # 要件の基本成績（1軍）
     need = [
         "年度", "選手名", "選手ID", "所属", "年齢", "投", "打",
-        "登板", "先発", "勝利", "敗戦", "S", "HLD", "HP",
-        "完投", "完封", "無四球", "勝率",
-        "投球回", "被打者", "被安打", "被本塁打",
-        "三振", "四球", "敬遠", "死球", "暴投", "ボーク",
-        "失点", "自責",
-        "被打率", "被出塁率", "被長打率",
+        "防御率", "登板", "先発", "勝利", "敗戦", "S", "HLD",
+        "完投", "完封", "無四球",
+        "被打者", "投球回", "投球回_outs",
+        "被安打", "被本塁打",
+        "四球", "敬遠", "死球", "三振",
+        "暴投", "ボーク",
+        "失点", "自責点",
     ]
     exist = [c for c in need if c in df.columns]
     df = df[exist].copy()
 
+    # 型寄せ
     df["年度"] = pd.to_numeric(df["年度"], errors="coerce").astype("Int64")
     df["選手ID"] = df["選手ID"].astype(str)
+
+    # 整数化したい列
+    int_cols = [
+        "登板","先発","勝利","敗戦","S","HLD","完投","完封","無四球",
+        "被打者","投球回_outs","被安打","被本塁打","四球","敬遠","死球","三振",
+        "暴投","ボーク","失点","自責点"
+    ]
+    for c in int_cols:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0).astype(int)
+
+    # 防御率はfloat
+    if "防御率" in df.columns:
+        df["防御率"] = pd.to_numeric(df["防御率"], errors="coerce")
+
     df = df.dropna(subset=["年度", "選手ID"])
     return df
 
@@ -179,29 +236,53 @@ def build_pitching_1_raw(df: pd.DataFrame) -> pd.DataFrame:
 def build_pitching_2_raw(df: pd.DataFrame) -> pd.DataFrame:
     df = normalize_columns(df)
 
-    # 2軍は表記揺れがあり得るので寄せる
-    if "自責点" in df.columns and "自責" not in df.columns:
-        df = df.rename(columns={"自責点": "自責"})
+    # 表記ゆれ寄せ（2軍）
+    if "自責" in df.columns and "自責点" not in df.columns:
+        df = df.rename(columns={"自責": "自責点"})
+    if "自責点" in df.columns and "自責点" not in df.columns:
+        df = df.rename(columns={"自責点": "自責点"})
     if "打者" in df.columns and "被打者" not in df.columns:
         df = df.rename(columns={"打者": "被打者"})
     if "安打" in df.columns and "被安打" not in df.columns:
         df = df.rename(columns={"安打": "被安打"})
     if "本塁打" in df.columns and "被本塁打" not in df.columns:
         df = df.rename(columns={"本塁打": "被本塁打"})
+    if "回数" in df.columns and "投球回" not in df.columns:
+        df = df.rename(columns={"回数": "投球回"})
 
+    # ★投球回outs（ソート用）
+    if "投球回" in df.columns:
+        df["投球回_outs"] = df["投球回"].apply(innings_to_outs)
+
+    # 要件の基本成績（2軍：先発/HLDなし）
     need = [
         "年度", "選手名", "選手ID", "所属", "年齢", "投", "打",
-        "登板", "勝利", "敗戦", "S",
-        "完投", "完封", "無四球", "勝率",
-        "投球回", "被打者", "被安打", "被本塁打",
-        "三振", "四球", "敬遠", "死球", "暴投", "ボーク",
-        "失点", "自責",
+        "防御率", "登板", "勝利", "敗戦", "S",
+        "完投", "完封", "無四球",
+        "被打者", "投球回", "投球回_outs",
+        "被安打", "被本塁打",
+        "四球", "敬遠", "死球", "三振",
+        "暴投", "ボーク",
+        "失点", "自責点",
     ]
     exist = [c for c in need if c in df.columns]
     df = df[exist].copy()
 
     df["年度"] = pd.to_numeric(df["年度"], errors="coerce").astype("Int64")
     df["選手ID"] = df["選手ID"].astype(str)
+
+    int_cols = [
+        "登板","勝利","敗戦","S","完投","完封","無四球",
+        "被打者","投球回_outs","被安打","被本塁打","四球","敬遠","死球","三振",
+        "暴投","ボーク","失点","自責点"
+    ]
+    for c in int_cols:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0).astype(int)
+
+    if "防御率" in df.columns:
+        df["防御率"] = pd.to_numeric(df["防御率"], errors="coerce")
+
     df = df.dropna(subset=["年度", "選手ID"])
     return df
 
