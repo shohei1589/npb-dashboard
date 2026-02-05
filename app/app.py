@@ -477,9 +477,7 @@ def get_pitching_1(season: int, team: str) -> pd.DataFrame:
         params = [season, team]
 
     with sqlite3.connect(DB_PATH) as con:
-        df = pd.read_sql(sql, con, params=params)
-
-    return df
+        return pd.read_sql(sql, con, params=params)
 
 
 @st.cache_data
@@ -529,9 +527,7 @@ def get_pitching_2(season: int, team: str) -> pd.DataFrame:
         params = [season, team]
 
     with sqlite3.connect(DB_PATH) as con:
-        df = pd.read_sql(sql, con, params=params)
-
-    return df
+        return pd.read_sql(sql, con, params=params)
 
 
 cols_pitching_1 = [
@@ -1423,15 +1419,19 @@ full_html = f"""
     }}
   }}
 
-  /* ★選手名列の「固定表示（sticky）」用：背景と境界を用意（leftはJSで計算） */
-  thead th.name {{
+  /* ★選手名列を固定表示（左端固定） */
+  thead th.name.sticky {{
+    position: sticky !important;
+    left: 0px !important;
+    z-index: 8 !important;
     background: #f9fafb !important;
+    box-shadow: 2px 0 0 rgba(0,0,0,0.06);
   }}
-  tbody td.name {{
-    background: #ffffff !important;
-  }}
-  thead th.name.sticky,
   tbody td.name.sticky {{
+    position: sticky !important;
+    left: 0px !important;
+    z-index: 6 !important;
+    background: #ffffff !important;
     box-shadow: 2px 0 0 rgba(0,0,0,0.06);
   }}
 
@@ -1503,35 +1503,14 @@ full_html = f"""
   }}
   applyNameShrink();
 
-  // ★選手名列を横スクロールでも固定（leftは実測して適用）
+  // ★選手名列を左端に固定（横スクロールしても動かない）
   function applyStickyName() {{
     const nameTh = table.querySelector("thead th.name");
     if (!nameTh) return;
-
-    const leftPx = nameTh.offsetLeft; // 所属列がある/ない両対応
     nameTh.classList.add("sticky");
-    nameTh.style.position = "sticky";
-    nameTh.style.left = leftPx + "px";
-    nameTh.style.zIndex = "6";
-
-    table.querySelectorAll("tbody td.name").forEach(td => {{
-      td.classList.add("sticky");
-      td.style.position = "sticky";
-      td.style.left = leftPx + "px";
-      td.style.zIndex = "4";
-    }});
+    table.querySelectorAll("tbody td.name").forEach(td => td.classList.add("sticky"));
   }}
   applyStickyName();
-
-  // wrapのスクロールやリサイズでズレることがあるので再計算
-  wrap.addEventListener("scroll", () => {{
-    // leftは一定だが、環境によってoffsetLeftが変わることがあるので保険
-    applyStickyName();
-  }}, {{ passive: true }});
-  window.addEventListener("resize", () => {{
-    applyStickyName();
-    applyNameShrink();
-  }});
 
   // ソート（クリックで昇順↔降順）
   function getCellValue(tr, idx) {{
