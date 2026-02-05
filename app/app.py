@@ -108,6 +108,24 @@ def diverging_color(p: float) -> str:
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DB_PATH = PROJECT_ROOT / "data" / "npb.sqlite"
 
+st.sidebar.caption(f"DB_PATH: {DB_PATH}")
+st.sidebar.caption(f"DB exists: {DB_PATH.exists()}")
+
+def ensure_views_updated_or_show_error():
+    sql_path = PROJECT_ROOT / "scripts" / "create_views.sql"
+    try:
+        if not sql_path.exists():
+            raise FileNotFoundError(f"create_views.sql not found: {sql_path}")
+        with sqlite3.connect(DB_PATH) as con:
+            con.executescript(sql_path.read_text(encoding="utf-8"))
+            con.commit()
+    except Exception as e:
+        st.error("VIEW更新に失敗しました（Cloud側のDB/SQL配置を確認してください）")
+        st.code(repr(e))
+        st.stop()
+
+ensure_views_updated_or_show_error()
+
 def ensure_views_updated():
     sql_path = PROJECT_ROOT / "scripts" / "create_views.sql"
     if not sql_path.exists():
@@ -829,10 +847,20 @@ elif level == "2軍" and category == "打者成績":
     df = get_batting_2(season, team)   # batting_2_view
 
 elif level == "1軍" and category == "投手成績":
-    df = get_pitching_1(season, team)  # pitching_1_view（投球回_outs DESC）
+    try:
+        df = get_pitching_1(season, team)
+    except Exception as e:
+        st.error("投手データ取得でエラー（詳細表示）")
+        st.code(repr(e))
+        st.stop()
 
 elif level == "2軍" and category == "投手成績":
-    df = get_pitching_2(season, team)  # pitching_2_view（投球回_outs DESC）
+    try:
+        df = get_pitching_2(season, team)
+    except Exception as e:
+        st.error("投手データ取得でエラー（詳細表示）")
+        st.code(repr(e))
+        st.stop()
 
 else:
     df = pd.DataFrame()
