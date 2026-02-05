@@ -419,40 +419,53 @@ def get_batting_2(season: int, team: str) -> pd.DataFrame:
 
     return df
 
+def sql_in_clause(items: list[str]) -> tuple[str, list]:
+    """
+    IN (?, ?, ...) 用のプレースホルダ文字列とparamsを返す
+    """
+    items = [str(x) for x in items]
+    if not items:
+        # IN () を避ける（絶対にヒットしない条件にする）
+        return "(NULL)", []
+    ph = ",".join(["?"] * len(items))
+    return f"({ph})", items
 
 @st.cache_data
 def get_pitching_1(season: int, team: str) -> pd.DataFrame:
-    teams_1gun = tuple(NPB_TEAMS_1GUN)
+    teams_1gun = list(NPB_TEAMS_1GUN)
 
     if team == "すべて":
+        in_clause, in_params = sql_in_clause(teams_1gun)
         sql = f"""
         SELECT *
         FROM pitching_1_view
         WHERE 年度 = ?
-          AND 所属 IN {teams_1gun}
+          AND 所属 IN {in_clause}
         ORDER BY 投球回_outs DESC
         """
-        params = (season,)
+        params = [season] + in_params
 
     elif team == "セリーグ":
+        in_clause, in_params = sql_in_clause(CENTRAL + BAYSTARS_OLD)
         sql = f"""
         SELECT *
         FROM pitching_1_view
         WHERE 年度 = ?
-          AND 所属 IN {tuple(CENTRAL + BAYSTARS_OLD)}
+          AND 所属 IN {in_clause}
         ORDER BY 投球回_outs DESC
         """
-        params = (season,)
+        params = [season] + in_params
 
     elif team == "パリーグ":
+        in_clause, in_params = sql_in_clause(PACIFIC)
         sql = f"""
         SELECT *
         FROM pitching_1_view
         WHERE 年度 = ?
-          AND 所属 IN {tuple(PACIFIC)}
+          AND 所属 IN {in_clause}
         ORDER BY 投球回_outs DESC
         """
-        params = (season,)
+        params = [season] + in_params
 
     else:
         sql = """
@@ -461,7 +474,7 @@ def get_pitching_1(season: int, team: str) -> pd.DataFrame:
         WHERE 年度 = ? AND 所属 = ?
         ORDER BY 投球回_outs DESC
         """
-        params = (season, team)
+        params = [season, team]
 
     with sqlite3.connect(DB_PATH) as con:
         df = pd.read_sql(sql, con, params=params)
@@ -471,37 +484,40 @@ def get_pitching_1(season: int, team: str) -> pd.DataFrame:
 
 @st.cache_data
 def get_pitching_2(season: int, team: str) -> pd.DataFrame:
-    teams_2gun = tuple(NPB_TEAMS_1GUN + NPB_TEAMS_2GUN_EXTRA)
+    teams_2gun = list(NPB_TEAMS_1GUN + NPB_TEAMS_2GUN_EXTRA)
 
     if team == "すべて":
+        in_clause, in_params = sql_in_clause(teams_2gun)
         sql = f"""
         SELECT *
         FROM pitching_2_view
         WHERE 年度 = ?
-          AND 所属 IN {teams_2gun}
+          AND 所属 IN {in_clause}
         ORDER BY 投球回_outs DESC
         """
-        params = (season,)
+        params = [season] + in_params
 
     elif team == "イースタン":
+        in_clause, in_params = sql_in_clause(EASTERN)
         sql = f"""
         SELECT *
         FROM pitching_2_view
         WHERE 年度 = ?
-          AND 所属 IN {tuple(EASTERN)}
+          AND 所属 IN {in_clause}
         ORDER BY 投球回_outs DESC
         """
-        params = (season,)
+        params = [season] + in_params
 
     elif team == "ウエスタン":
+        in_clause, in_params = sql_in_clause(WESTERN)
         sql = f"""
         SELECT *
         FROM pitching_2_view
         WHERE 年度 = ?
-          AND 所属 IN {tuple(WESTERN)}
+          AND 所属 IN {in_clause}
         ORDER BY 投球回_outs DESC
         """
-        params = (season,)
+        params = [season] + in_params
 
     else:
         sql = """
@@ -510,7 +526,7 @@ def get_pitching_2(season: int, team: str) -> pd.DataFrame:
         WHERE 年度 = ? AND 所属 = ?
         ORDER BY 投球回_outs DESC
         """
-        params = (season, team)
+        params = [season, team]
 
     with sqlite3.connect(DB_PATH) as con:
         df = pd.read_sql(sql, con, params=params)
@@ -1407,6 +1423,18 @@ full_html = f"""
     }}
   }}
 
+  /* ★選手名列の「固定表示（sticky）」用：背景と境界を用意（leftはJSで計算） */
+  thead th.name {{
+    background: #f9fafb !important;
+  }}
+  tbody td.name {{
+    background: #ffffff !important;
+  }}
+  thead th.name.sticky,
+  tbody td.name.sticky {{
+    box-shadow: 2px 0 0 rgba(0,0,0,0.06);
+  }}
+
   /* 右端の余白カット */
   thead th:last-child, tbody td:last-child {{
     border-right: 0;
@@ -1465,10 +1493,44 @@ full_html = f"""
   }});
 
   // ★選手名セルがはみ出していたらフォント縮小
-  table.querySelectorAll("tbody td.name").forEach(td => {{
-    if (td.scrollWidth > td.clientWidth + 1) {{
-      td.classList.add("shrink");
-    }}
+  function applyNameShrink() {{
+    table.querySelectorAll("tbody td.name").forEach(td => {{
+      td.classList.remove("shrink");
+      if (td.scrollWidth > td.clientWidth + 1) {{
+        td.classList.add("shrink");
+      }}
+    }});
+  }}
+  applyNameShrink();
+
+  // ★選手名列を横スクロールでも固定（leftは実測して適用）
+  function applyStickyName() {{
+    const nameTh = table.querySelector("thead th.name");
+    if (!nameTh) return;
+
+    const leftPx = nameTh.offsetLeft; // 所属列がある/ない両対応
+    nameTh.classList.add("sticky");
+    nameTh.style.position = "sticky";
+    nameTh.style.left = leftPx + "px";
+    nameTh.style.zIndex = "6";
+
+    table.querySelectorAll("tbody td.name").forEach(td => {{
+      td.classList.add("sticky");
+      td.style.position = "sticky";
+      td.style.left = leftPx + "px";
+      td.style.zIndex = "4";
+    }});
+  }}
+  applyStickyName();
+
+  // wrapのスクロールやリサイズでズレることがあるので再計算
+  wrap.addEventListener("scroll", () => {{
+    // leftは一定だが、環境によってoffsetLeftが変わることがあるので保険
+    applyStickyName();
+  }}, {{ passive: true }});
+  window.addEventListener("resize", () => {{
+    applyStickyName();
+    applyNameShrink();
   }});
 
   // ソート（クリックで昇順↔降順）
@@ -1497,13 +1559,9 @@ full_html = f"""
     }});
     rows.forEach(r => tbody.appendChild(r));
 
-    // ソート後に幅判定をやり直す（行の並びが変わるだけなので軽い）
-    table.querySelectorAll("tbody td.name").forEach(td => {{
-      td.classList.remove("shrink");
-      if (td.scrollWidth > td.clientWidth + 1) {{
-        td.classList.add("shrink");
-      }}
-    }});
+    // ソート後に再適用
+    applyNameShrink();
+    applyStickyName();
   }}
 
   ths.forEach((th, idx0) => {{
@@ -1521,6 +1579,7 @@ full_html = f"""
 </body>
 </html>
 """
+
 
 row_h = 34 if is_mobile else 0
 if is_mobile:
